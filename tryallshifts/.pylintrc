@@ -1,0 +1,6 @@
+[MASTER]
+extension-pkg-whitelist=torch
+
+[TYPECHECK]
+ignored-modules=torch,
+ignored-classes=torch,

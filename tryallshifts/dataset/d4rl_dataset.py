@@ -77,7 +77,7 @@ class D4RLTrajectoryLoader:
         timeouts: np.ndarray,
         terminals: np.ndarray,
         batch_size: int = 32,
-        trajectoy_len: int = 10,
+        trajectoy_len: int = 8,
         #return_done: bool = True  # whether to aggregate timeouts and terminals
         **_  # for "infos/..."
     ) -> None:
@@ -97,7 +97,7 @@ class D4RLTrajectoryLoader:
 
         self.observations = np.concatenate(
             (self.observations, next_observations[trajectoy_len - 1:, None]),
-            axis=1  # (N, Window, ...) + (N, "1", ...) -> (N, Window + 1, ...)
+            axis=1  # (N - W + 1, W, ...) + (N - W + 1, 1, ...) -> (N - W + 1, W + 1, ...)
         )
 
         self.indices = np.arange(len(self.observations))[
@@ -110,7 +110,7 @@ class D4RLTrajectoryLoader:
             (8 * self.batch_size, 8),  # Strides a full batch size memory for batch dimension, and then a single int64.
             writeable=False
         )
-    
+
 
     def __iter__(self) -> Trajectory:
         np.random.shuffle(self.indices)

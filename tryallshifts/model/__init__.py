@@ -1,1 +1,3 @@
-from tryallshifts.model.world_model import WorldModel
+from tryallshifts.model.net import *
+from tryallshifts.model.rssm import *
+from tryallshifts.model.world_model import *

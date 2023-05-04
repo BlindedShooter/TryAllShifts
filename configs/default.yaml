@@ -1,0 +1,15 @@
+# Environment
+task: halfcheetah
+behavior: medium-expert-v2
+discount: 0.99
+observation_shape: [17,]
+action_shape: [6,]
+modality: state
+
+
+
+# Model
+world_model:
+  hidden_dim: 256
+  cls_name: MLPWorldModel
+  net_arch: [256, 256, 256]
