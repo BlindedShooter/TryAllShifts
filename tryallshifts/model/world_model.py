@@ -60,25 +60,32 @@ class DynamicsSSMWorldModel(DynamicsWorldModel):
     def rssm_rollout_actions(self, prev_rssm_state: State) -> Tuple[TrajState, TrajReward, TrajDone]: ...
 
 
+
 class MLPWorldModel(WorldModel):
     def __init__(self, config: OmegaConf):
         super().__init__(config)
 
-        self.mlp = construct_mlp(
+        self.enc = construct_mlp(
             [
                 shape_flattener(config.observation_shape) + shape_flattener(config.action_shape),
-            ] + config.world_model.net_arch, 
+            ] + config.world_model.enc_arch, 
             activation=nn.SiLU
         )
         
-        self.recon_head = nn.Linear(config.world_model.hidden_dim, shape_flattener(config.observation_shape))
-        self.reward_head = nn.Linear(config.world_model.hidden_dim, 1)
-        self.done_head = nn.Sequential(nn.Linear(config.world_model.hidden_dim, 1), nn.Sigmoid())
+        self.recon_head = construct_mlp(
+            config.world_model.enc_arch[-2:-1] + config.world_model.recon_arch + [shape_flattener(config.observation_shape),],
+            activation=nn.SiLU
+        )
+        self.reward_head = construct_mlp(config.world_model.enc_arch[-2:-1] + config.world_model.reward_arch + [1,], nn.SiLU)
+        self.done_head = nn.Sequential(
+            construct_mlp(config.world_model.enc_arch[-2:-1] + config.world_model.done_arch + [1,], nn.SiLU),
+            nn.Sigmoid()
+        )
     
 
     def forward(self, observation: Observation, action: Action) -> Tuple[Observation, Reward, Done]:
         batch_size = observation.shape[0]
-        state = self.mlp(torch.concat((observation.reshape(batch_size, -1), action.reshape(batch_size, -1)), dim=1))
+        state = self.enc(torch.concat((observation.reshape(batch_size, -1), action.reshape(batch_size, -1)), dim=1))
 
         return self.recon_head(state).reshape(batch_size, *self.config.observation_shape), self.reward_head(state), self.done_head(state)
     
@@ -96,7 +103,7 @@ class MLPWorldModel(WorldModel):
         batch_size = observation.shape[0]
 
         for _ in range(steps - 1):
-            state = self.mlp(torch.concat((observations[-1].view(batch_size, -1), actions[-1].view(batch_size, -1)), dim=1))
+            state = self.enc(torch.concat((observations[-1].view(batch_size, -1), actions[-1].view(batch_size, -1)), dim=1))
             observations.append(self.recon_head.forward(state).view(batch_size, *self.config.observation_shape))
             actions.append(policy(observations[-1]).view(batch_size, *self.config.action_shape))
             rewards.append(self.reward_head.forward(state))
@@ -113,7 +120,7 @@ class MLPWorldModel(WorldModel):
         batch_size = observation.shape[0]
 
         for action in actions:
-            state = self.mlp(torch.concat((observations[-1].view(batch_size, -1), action.view(batch_size, -1)), dim=1))
+            state = self.enc(torch.concat((observations[-1].view(batch_size, -1), action.view(batch_size, -1)), dim=1))
             observations.append(self.recon_head.forward(state).view(batch_size, *self.config.observation_shape))
             rewards.append(self.reward_head.forward(state))
             dones.append(self.done_head.forward(state))
@@ -122,24 +129,81 @@ class MLPWorldModel(WorldModel):
 
 
 
-class DynamicsMLPWorldModel(MLPWorldModel):
+class DynamicsMLPWorldModel(WorldModel):
     def __init__(self, config: OmegaConf):
         super().__init__(config)
+        self.enc = construct_mlp(
+            [
+                config.dyn_encoder.dyn_dim + shape_flattener(config.observation_shape) + shape_flattener(config.action_shape),
+            ] + config.world_model.enc_arch, 
+            activation=nn.SiLU
+        )
+        
+        self.recon_head = construct_mlp(
+            config.world_model.enc_arch[-2:-1] + config.world_model.recon_arch + [shape_flattener(config.observation_shape),],
+            activation=nn.SiLU
+        )
+        self.reward_head = construct_mlp(config.world_model.enc_arch[-2:-1] + config.world_model.reward_arch + [1,], nn.SiLU)
+        self.done_head = nn.Sequential(
+            construct_mlp(config.world_model.enc_arch[-2:-1] + config.world_model.done_arch + [1,], nn.SiLU),
+            nn.Sigmoid()
+        )
+
+
+    def forward(self, observation: Observation, action: Action, dynamics: Dynamics) -> torch.Tensor:
+        """
+        observation: (B, Obs)
+        action: (B, Act)
+        dynamics: (B, Dyn)
+        """
+        batch_size = observation.shape[0]
+        latent = self.enc(torch.concat(
+            (observation.view(batch_size, -1), action.view(batch_size, -1), dynamics), dim=1
+        ))
+
+        return latent
+
+
+    def predict(self, observation: Observation, action: Action, dynamics: Dynamics) -> Tuple[Observation, Reward, Done]:
+        latent = self.forward(observation, action, dynamics)
+        return self.recon_head(latent), self.reward_head(latent), self.done_head(latent)
+
+
+    # What about dynamics update every step?
+    def rollout(self, observation: Observation, policy: ObservationPolicy, dynamics: Dynamics, steps: int = 8):
+        observations = [observation,]
+        actions = [policy(observation),]
+        rewards = []
+        dones = []
+
+        batch_size = observation.shape[0]
+
+        for _ in range(steps - 1):
+            state = self.forward(observations[-1], actions[-1], dynamics)
+            observations.append(self.recon_head.forward(state).view(batch_size, *self.config.observation_shape))
+            actions.append(policy(observations[-1]).view(batch_size, *self.config.action_shape))
+            rewards.append(self.reward_head.forward(state))
+            dones.append(self.done_head.forward(state))
+        
+        return observations, actions, rewards, dones
+
+
+    def rollout_actions(self, observation: Observation, actions: TrajAction, dynamics: Dynamics) -> Tuple[TrajObservation, TrajReward, TrajDone]:
+        observations = [observation,]
+        rewards = []
+        dones = []
+
+        batch_size = observation.shape[0]
+
+        for action in actions:
+            state = self.forward(observations, actions, dynamics)
+            observations.append(self.recon_head.forward(state).view(batch_size, *self.config.observation_shape))
+            rewards.append(self.reward_head.forward(state))
+            dones.append(self.done_head.forward(state))
+        
+        return observations, actions, rewards, dones
     
-    def forward(self, observation: Observation, action: Action) -> Tuple[Observation, Reward, Done]:
-        return super().forward(observation, action)
-
-    def predict(self, observation: Observation, action: Action) -> Tuple[Observation, Reward, Done]:
-        return super().predict(observation, action)
-
-    def rollout(self, observation: Observation, policy: ObservationPolicy, steps: int = 8):
-        return super().rollout(observation, policy, steps)
-
-    def rollout_actions(self, observation: Observation, actions: TrajAction) -> Tuple[TrajObservation, TrajReward, TrajDone]:
-        return super().rollout_actions(observation, actions)
     
-
-
 
 
 class SSMModel(WorldModel):
@@ -166,6 +230,7 @@ class SSMModel(WorldModel):
     
     def encode(self, observation: Observation) -> State:
         return self.encoder(observation)
+
 
     # TODO: wrong
     def predict(self, state: State, action: Action) -> Tuple[State, Reward]:

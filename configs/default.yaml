@@ -1,10 +1,11 @@
 # Environment
-task: halfcheetah
-behavior: medium-expert-v2
+task: hopper
+behavior: medium-replay-v2
 discount: 0.99
 observation_shape: [17,]
 action_shape: [6,]
 modality: state
+device: 'cuda:0'
 
 
 
@@ -12,4 +13,16 @@ modality: state
 world_model:
   hidden_dim: 256
   cls_name: MLPWorldModel
-  net_arch: [256, 256, 256]
+  enc_arch: [256, 256, 256]
+  recon_arch: [128]   # if empty, one Linear Layer is applied
+  reward_arch: [128]  # if empty, one Linear Layer is applied
+  done_arch: [128]    # if empty, one Linear Layer is applied
+
+
+
+# 
+dyn_encoder:
+  dyn_batch_size: 256
+  arch: [256, 128]
+  cls_name: MLPDynamicsEncoder
+  dyn_dim: 32  # final output size

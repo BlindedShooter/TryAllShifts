@@ -53,6 +53,30 @@ class Transition(NamedTuple):
     terminal: Optional[Done]  # (B, )
 
 
+    def to_tensor(self, dtype=torch.float32, device=None):
+        return Transition(
+            torch.from_numpy(self.observation).to(dtype=dtype, device=device),
+            torch.from_numpy(self.action).to(dtype=dtype, device=device),
+            torch.from_numpy(self.reward).to(dtype=dtype, device=device),
+            torch.from_numpy(self.next_observation).to(dtype=dtype, device=device),
+            torch.from_numpy(self.timeout).to(dtype=dtype, device=device)  if self.timeout is not None else None,
+            torch.from_numpy(self.terminal).to(dtype=dtype, device=device) if self.terminal is not None else None
+        )
+
+    def to_numpy(self):
+        if isinstance(self.observation, torch.TensorType):
+            return Transition(
+                self.observation.detach().cpu().numpy(),
+                self.action.detach().cpu().numpy(),
+                self.reward.detach().cpu().numpy(),
+                self.next_observation.detach().cpu().numpy(),
+                self.timeout.detach().cpu().numpy()  if self.timeout is not None else None,
+                self.terminal.detach().cpu().numpy() if self.terminal is not None else None
+            )
+        else:
+            return self
+
+
 class Trajectory(NamedTuple):
     observations: TrajState  # (B, W + 1, ...)
     actions: TrajAction  # (B, W, ...)

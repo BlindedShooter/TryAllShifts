@@ -53,7 +53,7 @@ class D4RLTransitionLoader:
 
 
     def __getitem__(self, idx: Union[int, np.ndarray[np.int64]]) -> Transition:
-        return (
+        return Transition(
             self.observations[idx],  # (B, ...)
             self.actions[idx],  # (B, ...)
             self.rewards[idx],  # (B,)
@@ -130,7 +130,7 @@ class D4RLTrajectoryLoader:
 
 
     def __getitem__(self, idx: Union[int, np.ndarray[np.int64]]) -> Trajectory:
-        return (
+        return Trajectory(
             self.observations[idx],  # (B, W + 1, ...)
             self.actions[idx],  # (B, W, ...)
             self.rewards[idx],  # (B, W)
