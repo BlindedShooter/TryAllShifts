@@ -1,0 +1,4 @@
+task: halfcheetah
+discount: 0.99
+observation_shape: [17,]
+action_shape: [6,]
