@@ -4,29 +4,47 @@ import torch.nn as nn
 import torch.nn.functional as F
 from omegaconf import OmegaConf
 
-from tryallshifts.common.types import Sequence, Transition, Dynamics, Trajectory, Observation
+from tryallshifts.common.config import TASConfig
+from tryallshifts.common.types import Sequence, Transition, Dynamics, Trajectory, Observation, Union
 from tryallshifts.model.net import construct_mlp
 from tryallshifts.utils.misc import shape_flattener
 
 
 
-class DynamicsEncoder:
-    def __init__(self, config: OmegaConf):
+class DynamicsEncoder(nn.Module):
+    name: str = None
+    optim: torch.optim.Optimizer
+
+    def __init__(self, config: TASConfig):
+        super().__init__()
         self.config = config
-    
 
-    def transitions_encode(self, transitions: Sequence[Transition]) -> Dynamics:  # (B, Obs), (B, Act), (B, rew=1), (B, done=1), (B, Obs) -> (Dyn,)
+
+    def _transition_concat(self, trs: Union[Transition, Trajectory]) -> torch.Tensor:
+        to_concat = []
+
+        trs_view = trs.flattened_view()
+
+        for k in self.config.dyn_encoder.concat:
+            to_concat.append(trs_view[k])
+        
+        return torch.concatenate(to_concat, dim=-1)
+
+
+    def transitions_encode(self, transitions: Transition) -> Dynamics:  
+        # (..., Obs), (..., Act), (..., rew=1), (..., done=1), (..., Obs) -> (..., Dyn,)
         raise NotImplementedError
     
-    def trajectory_encode(self, trajectories: Trajectory) -> Dynamics:  # (B, T, Obs), (B, T, Act), (B, T, rew=1), (B, T, done=1), (B, T, Obs) -> (Dyn,)
+    def trajectory_encode(self, trajectories: Trajectory) -> Dynamics:  
+        # (..., T, Obs), (..., T, Act), (..., T, rew=1), (..., T, done=1), (..., T, Obs) -> (..., Dyn,)
         raise NotImplementedError
 
 
 
-class MLPDynamicsEncoder(DynamicsEncoder, nn.Module):
-    def __init__(self, config: OmegaConf):  # (B, ...)
-        DynamicsEncoder.__init__(self, config)
-        nn.Module.__init__(self)
+class MLPDynamicsEncoder(DynamicsEncoder):
+    name = "mlp_de"
+    def __init__(self, config: TASConfig):  # (B, ...)
+        super().__init__(config)
 
         self.dyn_enc = construct_mlp(
             [2 * shape_flattener(config.observation_shape)+ shape_flattener(config.action_shape) + 2,]\
@@ -34,6 +52,8 @@ class MLPDynamicsEncoder(DynamicsEncoder, nn.Module):
             + [config.dyn_encoder.dyn_dim,],
             nn.SiLU
         )
+
+        self.optim = eval(config.dyn_encoder.optim_cls)(self.parameters(), **config.dyn_encoder.optim_kwargs)
     
 
     def transitions_encode(self, transitions: Transition) -> Dynamics: 
@@ -52,3 +72,29 @@ class MLPDynamicsEncoder(DynamicsEncoder, nn.Module):
     def trajectory_encode(self, trajectories: Trajectory) -> Dynamics:  
         return super().trajectory_encode()
 
+
+
+class RNNDynamicsEncoder(DynamicsEncoder):
+    name = "rnn_de"
+    def __init__(self, config: TASConfig):
+        super().__init__(config)
+
+        self.hidden = nn.Parameter(torch.zeros(
+                (len(config.dyn_encoder.arch), config.batch_size, config.dyn_encoder.dyn_dim,)
+            ), requires_grad=config.dyn_encoder.learnable_init_state
+        )  # start from true dynamics = [0, 0, ...]?
+
+        self.rnn = nn.RNN(
+            input_size=config.dyn_encoder.inp_size,
+            hidden_size=config.dyn_encoder.dyn_dim, nonlinearity="relu",
+            num_layers=len(config.dyn_encoder.arch), batch_first=True
+        )
+
+        self.optim = eval(config.dyn_encoder.optim_cls)(self.parameters(), **config.dyn_encoder.optim_kwargs)
+
+    # 정보가 리니어하게 늘어난다고 생각?
+    def trajectory_encode(self, trajectories: Trajectory) -> Dynamics:
+        inp = self._transition_concat(trajectories)
+        rnn_out, _ = self.rnn(inp, self.hidden)
+
+        return rnn_out  # (B, T, D)

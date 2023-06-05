@@ -1,7 +1,10 @@
 # From TD-MPC Github code by Nicklas Hansen, https://github.com/nicklashansen/tdmpc/blob/main/src/cfg.py
 import os
 import re
-from omegaconf import OmegaConf
+from typing import Tuple, Dict, Any
+from dataclasses import dataclass, field
+from omegaconf import OmegaConf, MISSING
+
 
 
 def parse_config(config_path: str) -> OmegaConf:
@@ -48,3 +51,68 @@ def parse_config(config_path: str) -> OmegaConf:
     base.exp_name = str(base.get('exp_name', 'default'))
 
     return base
+
+
+
+@dataclass
+class ModelConfig:
+    cls_name: str = MISSING
+    optim_cls: str = "torch.optim.AdamW"
+    optim_kwargs: Dict[str, Any] = field(default_factory=lambda: {})
+    loss_weights: Dict[str, float] = field(default_factory=lambda: {})
+
+    def get_cls(self, cls_dict):
+        return cls_dict[self.cls_name]
+
+
+
+@dataclass
+class TASWorldModelConfig(ModelConfig):
+  enc_arch: Tuple[int] = (512, 512, 512)  # (Observation, Action -> State)
+  recon_arch: Tuple[int] = (256,)   # (State -> Observation)   if empty, one Linear Layer is applied
+  reward_arch: Tuple[int] = (256,) # (State -> reward)   if empty, one Linear Layer is applied
+  done_arch: Tuple[int] = (256,)    # (State -> Terminated)   if empty, one Linear Layer is applied
+
+
+
+@dataclass
+class TASDynamicsConfig(ModelConfig):
+  use_trajectory: bool = False
+  concat: str = "OAR"  # O: Observation, A: Action, R: Reward, T: Done, N: Next Obs, S: State, M: Next State, B: Action Dist, D: Dynamics
+
+  dyn_dim: int = 32  # final output size
+  learnable_init_state: bool = False
+  inp_size: int = 24  # hmm.. auto calculate from .concat?
+
+  arch: Tuple[int] = (256, 128)  # if RNN, dimensions are ignored, only number of layers will be used.
+
+
+
+@dataclass
+class TASPolicyConfig(ModelConfig):
+    value_arch: Tuple[int] = (256, 256)
+    actor_arch: Tuple[int] = (256, 256)
+
+
+
+@dataclass
+class TASConfig:
+    exp_name: str = MISSING
+    task: str = MISSING
+    behavior: str = MISSING
+    val_behavior: str = MISSING
+    discount: float = MISSING
+    observation_shape: Tuple[int] = MISSING
+    action_shape: Tuple[int] = MISSING
+    device: str = "cpu"
+
+    batch_size: int = 64
+    rollout_len: int = 16
+    epochs: int = 100
+    val_freq: int = 8
+
+    ckpt_freq: int = 5000
+    
+    world_model: TASWorldModelConfig = TASWorldModelConfig()
+    dyn_encoder: TASDynamicsConfig = TASDynamicsConfig()
+    policy: TASPolicyConfig = TASPolicyConfig()

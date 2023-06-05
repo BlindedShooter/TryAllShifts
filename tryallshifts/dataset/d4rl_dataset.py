@@ -131,9 +131,9 @@ class D4RLTrajectoryLoader:
 
     def __getitem__(self, idx: Union[int, np.ndarray[np.int64]]) -> Trajectory:
         return Trajectory(
-            self.observations[idx],  # (B, W + 1, ...)
-            self.actions[idx],  # (B, W, ...)
-            self.rewards[idx],  # (B, W)
-            self.timeouts[idx],  # (B, W)
-            self.terminals[idx]  # (B, W)
+            observations=self.observations[idx],  # (B, W + 1, ...)
+            actions=self.actions[idx],  # (B, W, ...)
+            rewards=self.rewards[idx],  # (B, W)
+            timeouts=self.timeouts[idx],  # (B, W)
+            terminals=self.terminals[idx]  # (B, W)
         )
