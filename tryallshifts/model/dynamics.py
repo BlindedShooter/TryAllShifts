@@ -50,7 +50,7 @@ class MLPDynamicsEncoder(DynamicsEncoder):
             [2 * shape_flattener(config.observation_shape)+ shape_flattener(config.action_shape) + 2,]\
             + config.dyn_encoder.arch\
             + [config.dyn_encoder.dyn_dim,],
-            nn.SiLU
+            eval(config.world_model.actv_cls)
         )
 
         self.optim = eval(config.dyn_encoder.optim_cls)(self.parameters(), **config.dyn_encoder.optim_kwargs)
@@ -91,6 +91,7 @@ class RNNDynamicsEncoder(DynamicsEncoder):
         )
 
         self.optim = eval(config.dyn_encoder.optim_cls)(self.parameters(), **config.dyn_encoder.optim_kwargs)
+
 
     # 정보가 리니어하게 늘어난다고 생각?
     def trajectory_encode(self, trajectories: Trajectory) -> Dynamics:

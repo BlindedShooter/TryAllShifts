@@ -71,16 +71,16 @@ class MLPWorldModel(WorldModel):
         self.enc = construct_mlp(
             [
                 shape_flattener(config.observation_shape) + shape_flattener(config.action_shape),
-            ] + config.world_model.enc_arch, activation=nn.SiLU
+            ] + config.world_model.enc_arch, activation=eval(config.world_model.actv_cls)
         )
         
         self.recon_head = construct_mlp(
             config.world_model.enc_arch[-2:-1] + config.world_model.recon_arch + [shape_flattener(config.observation_shape),],
-            activation=nn.SiLU
+            activation=eval(config.world_model.actv_cls)
         )
-        self.reward_head = construct_mlp(config.world_model.enc_arch[-2:-1] + config.world_model.reward_arch + [1,], nn.SiLU)
+        self.reward_head = construct_mlp(config.world_model.enc_arch[-2:-1] + config.world_model.reward_arch + [1,], eval(config.world_model.actv_cls))
         self.done_head = nn.Sequential(
-            construct_mlp(config.world_model.enc_arch[-2:-1] + config.world_model.done_arch + [1,], nn.SiLU),
+            construct_mlp(config.world_model.enc_arch[-2:-1] + config.world_model.done_arch + [1,], eval(config.world_model.actv_cls)),
             nn.Sigmoid()
         )
 
@@ -163,16 +163,16 @@ class DynamicsMLPWorldModel(DynamicsWorldModel):
             [
                 config.dyn_encoder.dyn_dim + shape_flattener(config.observation_shape) + shape_flattener(config.action_shape),
             ] + config.world_model.enc_arch, 
-            activation=nn.SiLU
+            activation=eval(config.world_model.actv_cls)
         )
         
         self.recon_head = construct_mlp(
             [config.world_model.enc_arch[-1],] + config.world_model.recon_arch + [shape_flattener(config.observation_shape),],
-            activation=nn.SiLU
+            activation=eval(config.world_model.actv_cls)
         )
-        self.reward_head = construct_mlp([config.world_model.enc_arch[-1],] + config.world_model.reward_arch + [1,], nn.SiLU)
+        self.reward_head = construct_mlp([config.world_model.enc_arch[-1],] + config.world_model.reward_arch + [1,], eval(config.world_model.actv_cls))
         self.done_head = nn.Sequential(
-            construct_mlp([config.world_model.enc_arch[-1],] + config.world_model.done_arch + [1,], nn.SiLU),
+            construct_mlp([config.world_model.enc_arch[-1],] + config.world_model.done_arch + [1,], eval(config.world_model.actv_cls)),
             nn.Sigmoid()
         )
 
@@ -220,6 +220,11 @@ class DynamicsMLPWorldModel(DynamicsWorldModel):
                 observations.append(next_ob.detach())
                 rewards.append(rew.detach())
                 dones.append(done.detach())
+            else:
+                actions.append(action)
+                observations.append(next_ob)
+                rewards.append(rew)
+                dones.append(done)
         
         return Trajectory(
             observations=torch.stack(observations, dim=1),  # List[(B, O)] -> (B, T, O)
@@ -279,11 +284,11 @@ class SSMModel(WorldModel):
         self.config = config
 
         self.encoder = construct_mlp(
-            [shape_flattener(config.observation_shape),] + config.world_model.enc_arch, activation=nn.SiLU
+            [shape_flattener(config.observation_shape),] + config.world_model.enc_arch, activation=eval(config.world_model.actv_cls)
         )
         self.mlp = construct_mlp([
                 config.world_model.hidden_dim + shape_flattener(config.action_shape),
-            ] + config.world_model.net_arch, activation=nn.SiLU
+            ] + config.world_model.net_arch, activation=eval(config.world_model.actv_cls)
         )
 
         self.optim: torch.optim.Optimizer = eval(config.world_model.optim_cls)(self.parameters(), **config.world_model.optim_kwargs)
