@@ -1,4 +1,0 @@
-task: hopper
-discount: 0.99
-observation_shape: [11,]
-action_shape: [3,]
