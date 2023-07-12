@@ -21,14 +21,15 @@ class Logger:
 
         for i in range(1000):
             if not (tb_log_dir := Path(f'{self.log_dir}/{config.exp_name}_{i}')).exists():
+                tb_log_dir.mkdir(parents=True)
                 break
         self.tb_log_dir = tb_log_dir
-        self.writer = SummaryWriter(log_dir=tb_log_dir)
+        self.writer = SummaryWriter(log_dir=tb_log_dir, write_to_disk=(not config.debug))
         self.writer.add_text('config', str(asdict(config)), self.last_log_step)
         if log_wandb:
             wandb.init(
                 name=config.exp_prefix, project='tas', dir=self.log_dir, config=asdict(config),
-                tags=config.get_tags(), save_code=True, mode='online'
+                tags=config.get_tags(), save_code=True, mode=('online' if not config.debug else 'offline')
             )
         self.info_dict = {}
 

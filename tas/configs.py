@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from functools import cached_property
+from typing import Dict, Any
 import gym
 import d4rl
 import numpy as np
@@ -24,11 +24,11 @@ class ContextMLPConfig:
 @dataclass
 class ModelConfig:
     net_config: ContextMLPConfig = field(default_factory=lambda: ContextMLPConfig())
-    optim_kwargs: dict = field(default_factory=lambda: {'lr': 1e-3, 'weight_decay': 1e-4})
+    optim_kwargs: dict = field(default_factory=lambda: {'lr': 1e-3, 'weight_decay': 1e-5})
     grad_clip_norm: float = 10.0
     stochastic: bool = False
-    num_dist_params: int = 1  # ignored if deterministic
-    dist_cls: str = 'TanhNormal'  # ignored if deterministic
+    num_dist_params: int = 2  # ignored if deterministic
+    device: str = None  # will be set on post_init
 
 
 
@@ -61,7 +61,7 @@ class CriticConfig(ModelConfig):
 @dataclass
 class DynModelConfig(ModelConfig):
     net_config: ContextMLPConfig = field(default_factory=lambda: ContextMLPConfig(
-        inp_keys=['observation', 'action'], out_keys=['next_observation'], actv='SiLU'
+        inp_keys=['observation', 'action'], out_keys=['next_observation'], actv='SiLU', arch=[256, 256, 256]
     ))
 
 
@@ -77,8 +77,14 @@ class RewardModelConfig(ModelConfig):
 @dataclass
 class WorldModelConfig(ModelConfig):
     env_name: str = ''
+    use_separate_reward_model: bool = False  # will add reward dimension automatically to the output of dynamics model
     dyn_model_config: DynModelConfig = field(default_factory=DynModelConfig)
     reward_model_config: RewardModelConfig = field(default_factory=RewardModelConfig)
+    stochastic: bool = True
+
+    def __post_init__(self):
+        self.dyn_model_config.stochastic = self.stochastic
+        self.reward_model_config.stochastic = self.stochastic
 
 
 
@@ -89,7 +95,7 @@ class DynEncoderConfig(ModelConfig):
     net_config = None  # unused
     enc_config: ContextMLPConfig = field(default_factory=lambda: ContextMLPConfig(
         # out_keys name can overlap for now... only used for shape inference.
-        net_cls="PlainMLP", inp_keys=['observation', 'action', 'reward', 'next_observation'], out_keys=['dynamics']  
+        net_cls="PlainMLP", inp_keys=['observations', 'actions', 'next_observations'], out_keys=['dynamics']  
     ))
     obs_enc_config: ContextMLPConfig = field(default_factory=lambda: ContextMLPConfig(
         net_cls="PlainMLP", inp_keys=['observation'], out_keys=['dynamics']
@@ -112,6 +118,7 @@ class TASConfig:
     val_env_name: str = 'halfcheetah-expert-v2'
     
     log_dir: str = 'logs'
+    debug: bool = False
     exp_prefix: str = ''
     proj_name: str = 'TAS'
     info_polyak: float = 0.995
@@ -123,14 +130,19 @@ class TASConfig:
     eval_save_video: bool = False
     eval_save_dir: str = 'eval'
 
-    wm_train_steps: int = 20000
+    wm_train_steps: int = 100000
     policy_train_steps: int = 1000000
+    dynenc_update_freq: int = 16
     gamma: float = 0.99
     target_entropy: float = -1.0
     init_alpha: float = 0.01
     # For dynamics encoder
     imag_horizon: int = 64
+    #
+    policy_rollout_len: int = 16
     use_dyn: bool = True
+    use_mopo_pen: bool = False  # Only available if world model is stochastic
+    mopo_pen_lam: float = 1.0
     warmup_steps: int = 10000
     buffer_size: int = 1000000
 
@@ -142,6 +154,11 @@ class TASConfig:
 
     def __post_init__(self):
         self.wm_config.env_name = self.env_name
+        self.wm_config.device = self.device
+        self.dyn_enc_config.device = self.device
+        self.actor_config.device = self.device
+        self.critic_config.device = self.device
+
 
 
     def infer_shapes(self):
@@ -160,20 +177,34 @@ class TASConfig:
             'multi_value': self.critic_config.num_critics,
             'dynamics': self.dyn_enc_config.dyn_dim if self.use_dyn else 0,
         }
+
+        dim_dict.update({k + 's' : v for k, v in dim_dict.items()})
         self.dim_dict = dim_dict
+        self.actor_config.event_dims = len(env.action_space.shape)
         
         if not self.use_dyn:
             self.disable_dynamics()
 
         # Iterate through all ContextMLPConfigs and infer shapes
-        for config in [self.actor_config.net_config, self.critic_config.net_config, 
-                        self.wm_config.dyn_model_config.net_config, self.wm_config.reward_model_config.net_config, 
-                        self.dyn_enc_config.enc_config, self.dyn_enc_config.obs_enc_config]:
+        for config in [
+            self.actor_config, self.critic_config,
+            self.wm_config.dyn_model_config, self.wm_config.reward_model_config, 
+        ]:
+            config.net_config.inp_dim = sum([dim_dict[k] for k in config.net_config.inp_keys])
+            config.net_config.out_dim = sum([dim_dict[k] for k in config.net_config.out_keys])
+            config.net_config.context_dim = dim_dict['dynamics']
+
+            if config.stochastic:
+                config.net_config.out_dim *= config.num_dist_params
+
+        for config in (self.dyn_enc_config.obs_enc_config, self.dyn_enc_config.enc_config):
             config.inp_dim = sum([dim_dict[k] for k in config.inp_keys])
             config.out_dim = sum([dim_dict[k] for k in config.out_keys])
             config.context_dim = dim_dict['dynamics']
         
-        self.actor_config.net_config.out_dim *= self.actor_config.num_dist_params
+        if not self.wm_config.use_separate_reward_model:
+            self.wm_config.dyn_model_config.net_config.out_dim += self.wm_config.dyn_model_config.num_dist_params
+
     
 
     def disable_dynamics(self):

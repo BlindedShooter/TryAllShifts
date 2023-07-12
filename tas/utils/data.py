@@ -44,7 +44,7 @@ def numpify(x: Optional[ArrayLike]) -> np.ndarray:
         return x
 
 
-def tensorify(x: Optional[ArrayLike], dtype=torch.float32, device=None) -> torch.Tensor:
+def tensorify(x: Optional[ArrayLike], dtype=torch.float32, device=None, non_blocking=True) -> torch.Tensor:
     """
     Convert ArrayLike to torch tensor.
     
@@ -59,9 +59,10 @@ def tensorify(x: Optional[ArrayLike], dtype=torch.float32, device=None) -> torch
     if x is None:
         return None
     elif isinstance(x, torch.Tensor):
-        return x.to(device=device, dtype=dtype)
+        return x.to(device=device, dtype=dtype, non_blocking=non_blocking)
     elif isinstance(x, np.ndarray):
-        return torch.tensor(x, dtype=dtype, device=device)
+        return torch.from_numpy(x).to(device=device, dtype=dtype, non_blocking=non_blocking)
+        #return torch.tensor(x, dtype=dtype, device=device)
     else:
         #raise ValueError(f'Unknown type: {type(x)}')
         return x
@@ -78,7 +79,7 @@ def seq_to_numpy(x: T) -> T:
     return x.__class__(*[numpify(getattr(x, k.name)) for k in fields(x)])
 
 
-def seq_to_torch(x: T, dtype=torch.float32, device=None) -> T:
+def seq_to_torch(x: T, dtype=torch.float32, device=None, non_blocking=True) -> T:
     """
     Convert a Dataclass of ArrayLike objects as torch tensors.
 
@@ -90,4 +91,4 @@ def seq_to_torch(x: T, dtype=torch.float32, device=None) -> T:
     Returns:
         Sequence of torch tensors.
     """
-    return x.__class__(*[tensorify(getattr(x, k.name), dtype=dtype, device=device) for k in fields(x)])
+    return x.__class__(*[tensorify(getattr(x, k.name), dtype=dtype, device=device, non_blocking=non_blocking) for k in fields(x)])

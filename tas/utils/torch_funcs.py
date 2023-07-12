@@ -36,3 +36,14 @@ def get_weight_decay_params(model: nn.Module) -> set:
     no_wd_params = all_params - wd_params
 
     return wd_params, no_wd_params
+
+
+def gaussian_mse_loss(mu, logvar, target, logvar_loss = True):
+    if len(mu.shape) != len(target.shape):
+        print("gaussian_mse_loss: target shape not matching", mu.shape, target.shape)
+    inv_var = (-logvar).exp()
+
+    if logvar_loss:
+        return (logvar + (target - mu)**2 * inv_var).mean()
+    else:
+        return ((target - mu)**2).mean()

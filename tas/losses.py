@@ -11,12 +11,31 @@ from tas.model import *
 def calc_wm_loss(tran: Transition, wm: WorldModel, dynamics: Dynamics) -> Tuple[torch.Tensor, InfoDict]:
     obs, act, next_obs, rew, done = tran.observations, tran.actions, tran.next_observations, tran.rewards, tran.dones
     
-    next_obs_pred, rew_pred, done_pred = wm(obs, act, dynamics=dynamics)
+    next_obs_pred, rew_pred, done_pred, _ = wm(obs, act, dynamics=dynamics)
     dyn_loss = F.mse_loss(next_obs_pred, next_obs)
-    rew_loss = F.mse_loss(rew_pred.squeeze(), rew)
+    rew_loss = F.mse_loss(rew_pred, rew)
     wm_loss = dyn_loss + rew_loss
 
     return wm_loss, {'wm_loss': wm_loss.item(), 'dyn_loss': dyn_loss.item(), 'rew_loss': rew_loss.item()}
+
+
+def calc_stoch_wm_loss(tran: Transition, wm: WorldModel, dynamics: Dynamics) -> Tuple[torch.Tensor, InfoDict]:
+    obs, act, next_obs, reward, done = tran.observations, tran.actions, tran.next_observations, tran.rewards, tran.dones
+    
+    next_obs_pred, rew_pred, done_pred,\
+        (next_obs_mu, next_obs_logvar, reward_mu, reward_logvar) = wm(obs, act, dynamics=dynamics)
+    dyn_loss = gaussian_mse_loss(next_obs_mu, next_obs_logvar, next_obs)
+    rew_loss = gaussian_mse_loss(reward_mu.squeeze(), reward_logvar.squeeze(), reward)
+    logvar_loss = 0.01 * wm.obs_max_logvar.sum() - 0.01 * wm.obs_min_logvar.sum() + 0.01 * wm.reward_max_logvar.sum() - 0.01 * wm.reward_min_logvar.sum()
+
+    wm_loss = dyn_loss + rew_loss + logvar_loss
+    
+    with torch.no_grad():
+        dyn_mse_loss = F.mse_loss(next_obs_pred, next_obs)
+        rew_mse_loss = F.mse_loss(rew_pred.squeeze(), reward)
+    
+    return wm_loss, {'wm_loss': wm_loss.item(), 'dyn_loss': dyn_loss.item(), 'rew_loss': rew_loss.item(),
+                      'dyn_mse_loss': dyn_mse_loss.item(), 'rew_mse_loss': rew_mse_loss.item(), 'logvar_loss': logvar_loss.item()}
 
 
 def calc_dyn_enc_loss(traj: Trajectory, dyn_enc: DynEncoder) -> Tuple[torch.Tensor, InfoDict]:

@@ -15,7 +15,7 @@ def eval_wm_on_traj(wm: WorldModel, traj: Trajectory) -> InfoDict:
     if isinstance(dyn, DynEncoder):
         dyn = dyn(traj)
 
-    next_obs_pred, rew_pred, done_pred = wm(obs, act, dynamics=dynamics)
+    next_obs_pred, rew_pred, done_pred, _ = wm(obs, act, dynamics=dynamics)
     dyn_loss = F.mse_loss(next_obs_pred, next_obs)
     rew_loss = F.mse_loss(rew_pred, rew)
     wm_loss = dyn_loss + rew_loss
@@ -26,9 +26,14 @@ def eval_wm_on_traj(wm: WorldModel, traj: Trajectory) -> InfoDict:
 @torch.no_grad()
 def eval_wm_on_traj_oracledyn(wm: WorldModel, dyn_enc: DynEncoder, traj: Trajectory):
     obs, act, next_obs, rew, done = traj.observations, traj.actions, traj.next_observations, traj.rewards, traj.dones
-    dynamics = dyn_enc(traj).unsqueeze(0).repeat(obs.shape[0], 1, 1)
 
-    next_obs_pred, rew_pred, done_pred = wm(obs, act, dynamics=dynamics)
+    if dyn_enc is None:
+        dynamics = None
+    else:
+        dynamics = dyn_enc(traj).unsqueeze(0).repeat(obs.shape[0], 1, 1)
+
+    next_obs_pred, rew_pred, done_pred, _ = wm(obs, act, dynamics=dynamics)
+
     dyn_loss = F.mse_loss(next_obs_pred, next_obs)
     rew_loss = F.mse_loss(rew_pred, rew)
     wm_loss = dyn_loss + rew_loss
@@ -68,7 +73,7 @@ def eval_wm_on_env(wm: WorldModel, dynamics: Dynamics, env: gym.Env, policy: Act
     init_obs = env.reset()  # VecEnv?
     wm_device = next(wm.parameters()).device
     
-    imag_traj = wm.rollout_policy(tensorify(init_obs, device=wm_device).unsqueeze(0), policy, dynamics=dynamics, horizon=horizon)
+    imag_traj, _ = wm.rollout_policy(tensorify(init_obs, device=wm_device).unsqueeze(0), policy, dynamics=dynamics, horizon=horizon)
     true_traj = get_oracle_traj(env, imag_traj, policy, horizon=horizon)
 
     info = {}
