@@ -14,7 +14,7 @@ from tas.utils.done_funcs import DONE_FUNCS, not_done_func
 
 
 #maybe_compile = torch.compile
-maybe_compile = lambda x: x
+maybe_compile = lambda x: x  # compile makes things slower on Titan RTX
 
 
 class Actor(nn.Module):
@@ -144,7 +144,7 @@ class WorldModel(nn.Module):
 
     @maybe_compile
     def forward(self, obs: torch.Tensor, act: torch.Tensor, dynamics: Optional[torch.Tensor] = None,
-                 deterministic: bool = False, rew_pen: bool = False) -> Tuple[State, Reward]:
+                 deterministic: bool = False) -> Tuple[State, Reward]:
         if self.config.use_separate_reward_model:
             if self.config.stochastic:
                 next_obs_mu, next_obs_logvar = self.dyn_model(obs, act, dynamics=dynamics).chunk(2, dim=-1)
@@ -200,14 +200,15 @@ class WorldModel(nn.Module):
 
         return next_obs, reward, done, (next_obs_mu, next_obs_logvar, reward_mu, reward_logvar)
     
+    
     @maybe_compile
     def rollout_actions(self, obs: torch.Tensor, actions: torch.Tensor, dynamics: Optional[torch.Tensor] = None,
-                         horizon: int = 1, rew_pen: bool = False) -> Tuple[Trajectory, InfoDict]:
+                         horizon: int = 1, rew_pen: bool = False, deterministic: bool = False) -> Tuple[Trajectory, InfoDict]:
         obss, rewards, dones = [obs], [], []
         info = {}
 
         for i in range(horizon):
-            n_obs, reward, done, _ = self.forward(obss[-1], actions[i], dynamics[i])
+            n_obs, reward, done, _ = self.forward(obss[-1], actions[i], dynamics[i], deterministic)
             obss.append(n_obs)
             rewards.append(reward)
             dones.append(done)
@@ -220,10 +221,11 @@ class WorldModel(nn.Module):
             dynamics=dynamics
         ), info
     
+
     @maybe_compile
     def rollout_policy(self, obs: torch.Tensor, policy: Callable[[Observation, Dynamics], Action], 
                         dynamics: Optional[torch.Tensor] = None, horizon: int = 1,
-                        rew_pen: bool = False, lam: float=1.0) -> Tuple[Trajectory, InfoDict]:
+                        rew_pen: bool = False, lam: float=1.0, deterministic: bool = False) -> Tuple[Trajectory, InfoDict]:
         obss, actions, rewards, dones = [obs], [], [], []
         info = {}
         if rew_pen:
@@ -232,14 +234,13 @@ class WorldModel(nn.Module):
 
         for i in range(horizon):
             action = policy(obss[-1], dynamics[i])
-            n_obs, reward, done, (n_obs_mu, n_obs_logvar, rew_mu, rew_logvar) = self.forward(obss[-1], action, dynamics[i], rew_pen)
+            n_obs, reward, done, (n_obs_mu, n_obs_logvar, rew_mu, rew_logvar) = self.forward(obss[-1], action, dynamics[i], deterministic)
             
             if rew_pen:
-                mopo_pen = n_obs_logvar.exp().sqrt().norm(p=2, dim=1)
+                mopo_pen = n_obs_logvar.exp().sqrt().norm(p=2, dim=-1, keepdim=True)
                 info['rew_pen'] += mopo_pen.mean().item()
                 info['rew_pen_max'] = max(info['rew_pen_max'], mopo_pen.max().item())
                 reward = reward - lam * mopo_pen
-            
             obss.append(n_obs)
             actions.append(action)
             rewards.append(reward)
@@ -278,13 +279,18 @@ class MHDynEncoder(DynEncoder):
         self.obs_encoder: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = getattr(net, config.obs_enc_config.net_cls)(**asdict(config.obs_enc_config))
         self.query = nn.Parameter(torch.randn(1, 1, config.dyn_dim))  # (D,)
         self.mh_attn = nn.MultiheadAttention(embed_dim=config.dyn_dim, num_heads=1, add_bias_kv=True, batch_first=False)
+        self.ff = nn.Sequential(nn.SiLU(), nn.Linear(config.dyn_dim, config.dyn_dim))
     
     @maybe_compile
-    def forward(self, traj: Trajectory) -> Dynamics:
+    def forward(self, traj: Trajectory, only_last: bool=True) -> Dynamics:
         # RNN? Attention? Transformer?
         value = self.encoder(torch.cat(list(getattr(traj, k) for k in self.config.enc_config.inp_keys), dim=-1))  # (T, B, D)
         key = self.obs_encoder(traj.observations)  # (T, B, D)
-        query = self.query.expand(-1, traj.observations.shape[1], -1)  # (1, B, D)
+        
+        query = self.query.expand((-1 if only_last else traj.observations.shape[0]), traj.observations.shape[1], -1)  # (1, B, D)
         attn_output, _ = self.mh_attn.forward(query, key, value, need_weights=False)  # (1, B, D)
 
-        return avg_l1_norm(attn_output.squeeze(0))
+        if only_last:
+            attn_output = attn_output.squeeze(0)
+        
+        return avg_l1_norm(attn_output)
