@@ -133,24 +133,36 @@ class Trajectory(TensorDataclass):
     def next_observations(self):
         return self.all_observations[1:]
     
-    @property
+    
     def __len__(self):
-        return self.actions.shape[1]
+        return self.actions.shape[0]
 
-    
-    def __getitem__(self, idx):
-        return Transition(
-            observations=self.observations[idx] if self.observations is not None else None,
-            next_observations=self.next_observations[idx] if self.next_observations is not None else None,
-            actions=self.actions[idx] if self.actions is not None else None,
-            rewards=self.rewards[idx] if self.rewards is not None else None,
-            dones=self.dones[idx] if self.dones is not None else None,
-            states=self.states[idx] if self.states is not None else None,
-            action_dists=self.action_dists[idx] if self.action_dists is not None else None,
-            values=self.values[idx] if self.values is not None else None,
-            dynamics=self.dynamics[idx] if self.dynamics is not None else None
-        )
-    
+
+    def __getitem__(self, idx: Union[int, slice]):
+        if isinstance(idx, int):
+            return Transition(
+                observations=self.observations[idx] if self.observations is not None else None,
+                next_observations=self.next_observations[idx] if self.next_observations is not None else None,
+                actions=self.actions[idx] if self.actions is not None else None,
+                rewards=self.rewards[idx] if self.rewards is not None else None,
+                dones=self.dones[idx] if self.dones is not None else None,
+                states=self.states[idx] if self.states is not None else None,
+                action_dists=self.action_dists[idx] if self.action_dists is not None else None,
+                values=self.values[idx] if self.values is not None else None,
+                dynamics=self.dynamics[idx] if self.dynamics is not None else None
+            )
+        else:
+            return Trajectory(
+                all_observations=self.all_observations[idx.start:idx.stop+1:idx.step] if self.all_observations is not None else None,
+                actions=self.actions[idx] if self.actions is not None else None,
+                rewards=self.rewards[idx] if self.rewards is not None else None,
+                dones=self.dones[idx] if self.dones is not None else None,
+                states=self.states[idx] if self.states is not None else None,
+                action_dists=self.action_dists[idx] if self.action_dists is not None else None,
+                values=self.values[idx] if self.values is not None else None,
+                dynamics=self.dynamics[idx] if self.dynamics is not None else None
+            )
+
 
 def noneconcat(x: Optional[ArrayLike], y: Optional[ArrayLike], dim: int, raise_none = False) -> Optional[torch.Tensor]:
     if x is not None and y is not None:
