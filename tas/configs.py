@@ -135,7 +135,7 @@ class TASConfig:
     dynenc_update_freq: int = 16
     gamma: float = 0.99
     target_entropy: float = -1.0
-    init_alpha: float = 0.01
+    init_alpha: float = 0.5
     # For dynamics encoder
     imag_horizon: int = 64
     #
