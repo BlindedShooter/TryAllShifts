@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -7,7 +9,9 @@ from tas.configs import *
 from tas.utils import *
 from tas.model import *
 
-
+######################
+# World Model Losses #
+######################
 def calc_wm_loss(tran: Transition, wm: WorldModel, dynamics: Dynamics) -> Tuple[torch.Tensor, InfoDict]:
     obs, act, next_obs, rew, done = tran.observations, tran.actions, tran.next_observations, tran.rewards, tran.dones
     
@@ -38,13 +42,100 @@ def calc_stoch_wm_loss(tran: Transition, wm: WorldModel, dynamics: Dynamics) -> 
                       'dyn_mse_loss': dyn_mse_loss.item(), 'rew_mse_loss': rew_mse_loss.item(), 'logvar_loss': logvar_loss.item()}
 
 
-def calc_dyn_enc_loss(traj: Trajectory, dyn_enc: DynEncoder) -> Tuple[torch.Tensor, InfoDict]:
-    pred_dyn = dyn_enc(traj)
-    dyn_enc_loss = F.mse_loss(pred_dyn, traj.dynamics[-1])  # only predict last dynamics
+def calc_adaptive_wm_loss(traj: Trajectory, wm: WorldModel, dyn_enc: DynEncoder, stoch: bool=False) -> Tuple[torch.Tensor, InfoDict]:
+    wm_loss = 0.0
+    infos = defaultdict(list)
+
+    for i in range(1, len(traj)):
+        with torch.no_grad:
+            dyn = dyn_enc(traj[:i])  # (B, D)
+
+        if stoch:
+            loss, info = calc_stoch_wm_loss(traj[i], wm, dyn)
+        else:
+            loss, info = calc_wm_loss(traj[i], wm, dyn)
+        
+        wm_loss += loss
+        for k, v in info.items():
+            infos[k].append(v)
+    
+    for k, v in infos.items():
+        infos[k] = sum(v) / len(v)
+    
+    return wm_loss, infos
+
+
+###########################
+# Dynamics Encoder Losses #
+###########################
+def calc_dyn_enc_randdyn_loss(
+        traj: Trajectory, dyn_enc: DynEncoder, wm: WorldModel, actor: ActorType,
+        true_dyn: torch.Tensor, deterministic: bool=False, train_wm: bool=False, policy_imagine: bool=False
+    ) -> Tuple[torch.Tensor, InfoDict]:
+    rand_dynamics = avg_l1_norm(torch.empty((
+        1, traj.observations.shape[1], dyn_enc.config.dyn_dim
+    ), requires_grad=False, device=dyn_enc.config.device).normal_(-1, 1).expand(traj.observations.shape[0], -1, -1))
+
+    if policy_imagine:
+        imag_traj, _ = wm.rollout_policy(
+            traj.observations[0], actor.predict, dynamics=rand_dynamics, horizon=len(traj), deterministic=True
+        )
+    else:
+        imag_traj, _ = wm.rollout_actions(
+            traj.observations[0], traj.actions, dynamics=rand_dynamics, horizon=len(traj), deterministic=True
+        )
+    #traj = Trajectory(traj.all_observations, traj.actions, traj.rewards, traj.dones, dynamics=true_dyn)
+    traj.dynamics = true_dyn
+    
+    imag_traj = Trajectory(
+        imag_traj.all_observations.detach(), imag_traj.actions.detach(), 
+        imag_traj.rewards.detach(), imag_traj.dones.detach(), dynamics=imag_traj.dynamics.detach()
+    )
+    cat_traj = traj.torch_cat(imag_traj)
+
+    pred_dyn = dyn_enc(cat_traj)
+    dyn_enc_loss = F.mse_loss(pred_dyn, true_dyn[-1])  # predict only the last dynamics. (hmm)
 
     return dyn_enc_loss, {'dyn_enc_loss': dyn_enc_loss.item()}
 
 
+def calc_dyn_enc_persistent_loss(
+        traj: Trajectory, dyn_enc: DynEncoder, wm: WorldModel, policies: Sequence[ActorType], 
+        deterministic: bool=False, train_wm: bool=True, train_wm_sup: bool=True
+    ) -> Tuple[torch.Tensor, InfoDict]:
+    traj1, traj2 = split_trajectory(traj)
+
+    # no_grad needed?
+    with torch.no_grad():
+        target_dyn = dyn_enc(traj1)  # (B, D)
+
+    traj2.dynamics = target_dyn.expand(len(traj2), -1, -1)
+
+    if train_wm_sup:
+        wm_loss, wm_info = calc_stoch_wm_loss(traj2, wm, traj2.dynamics)
+    
+    rollouts = []
+    with torch.set_grad_enabled(train_wm):
+        for policy in policies:
+            rollouts.append(wm.rollout_policy(
+                traj2.all_observations[0], policy, dynamics=target_dyn.expand(len(traj2), -1, -1),
+                horizon=len(traj2), deterministic=deterministic
+            ))
+    imag_traj: Trajectory = stack_trajectory(rollouts + [traj2,])
+
+    imag_pred_dyns = dyn_enc(imag_traj)
+    dyn_enc_loss = F.mse_loss(imag_pred_dyns, imag_traj.dynamics[-1])  # predict only the last dynamics. (hmm)
+
+    loss = dyn_enc_loss + wm_loss
+    info = {'dyn_enc_loss': dyn_enc_loss.item()}
+    info.update(('persistent_dyn_' + k, v) for k, v in wm_info.items())
+
+    return loss, info
+
+
+################
+# Actor Losses #
+################
 def calc_actor_bc_loss(tran: Transition, actor: Actor) -> Tuple[torch.Tensor, InfoDict]:
     obs, act = tran.observations, tran.actions
 

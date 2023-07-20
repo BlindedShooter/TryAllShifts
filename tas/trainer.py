@@ -100,33 +100,15 @@ class TASTrainer:
 
     def train_dynenc(self, traj: Trajectory, train_wm: bool=True, policy_imagine: bool=False) -> InfoDict:
         self.dyn_encoder_optim.zero_grad()
-
-        rand_dynamics = avg_l1_norm(torch.empty((
-            1, traj.observations.shape[1], self.config.dyn_enc_config.dyn_dim
-        ), requires_grad=False, device=self.device).normal_(-1, 1).expand(traj.observations.shape[0], -1, -1))
-
-        if policy_imagine:
-            imag_traj, _ = self.wm.rollout_policy(
-                traj.observations[0], self.actor.predict, dynamics=rand_dynamics, horizon=self.config.imag_horizon
-            )
-        else:
-            imag_traj, _ = self.wm.rollout_actions(
-                traj.observations[0], traj.actions, dynamics=rand_dynamics, horizon=self.config.imag_horizon
-            )
-        traj = Trajectory(traj.all_observations, traj.actions, traj.rewards, traj.dones, dynamics=self.true_dynamics)
-        
         if train_wm:
             self.wm_optim.zero_grad()
-        else:
-            imag_traj = Trajectory(
-                imag_traj.all_observations.detach(), imag_traj.actions.detach(), 
-                imag_traj.rewards.detach(), imag_traj.dones.detach(), dynamics=imag_traj.dynamics.detach()
-            )
         
-        cat_traj = traj.torch_cat(imag_traj)
-
-        dyn_enc_loss, dyn_enc_info = calc_dyn_enc_loss(cat_traj, self.dyn_encoder)
+        dyn_enc_loss, dyn_enc_info = calc_dyn_enc_randdyn_loss(
+            traj, self.dyn_encoder, self.wm, self.actor.predict, self.true_dynamics,
+            deterministic=True, train_wm=train_wm, policy_imagine=policy_imagine
+        )
         dyn_enc_loss.backward()
+        
         nn.utils.clip_grad_norm_(self.dyn_encoder.parameters(), self.config.dyn_enc_config.grad_clip_norm)
         self.train_states['dynenc_grad_updates'] += 1
 
