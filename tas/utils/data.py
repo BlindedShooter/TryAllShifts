@@ -92,3 +92,36 @@ def seq_to_torch(x: T, dtype=torch.float32, device=None, non_blocking=True) -> T
         Sequence of torch tensors.
     """
     return x.__class__(*[tensorify(getattr(x, k.name), dtype=dtype, device=device, non_blocking=non_blocking) for k in fields(x)])
+
+
+def split_trajectory(traj: Trajectory, portion: float = 0.5) -> Tuple[Trajectory, Trajectory]:
+    l = len(traj)
+    split = int(l * portion)
+
+    def _split1(name, v):
+        if v is None:
+            return None
+        if name == 'all_observations':
+            return v[:split + 1]
+        return v[:split]
+
+
+    def _split2(name, v):
+        if v is None:
+            return None
+        return v[split:]
+
+
+    return (
+        Trajectory(**{k.name: _split1(k.name, getattr(traj, k.name)) for k in fields(traj)}),
+        Trajectory(**{k.name: _split2(k.name, getattr(traj, k.name)) for k in fields(traj)}),
+    )
+
+
+def stack_trajectory(trajs: Sequence[Trajectory]) -> Trajectory:
+    # Check if all trajs have the same length? fill with NaN if Trajectories are not consistent?
+    # Just stick with easiest implementation for now
+    return Trajectory(**{
+        k.name: torch.stack([getattr(traj, k.name) for traj in trajs], dim=1)\
+              for k in fields(trajs[0]) if getattr(trajs[0], k.name) is not None
+    })
