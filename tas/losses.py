@@ -104,6 +104,7 @@ def calc_dyn_enc_persistent_loss(
         deterministic: bool=False, train_wm: bool=True, train_wm_sup: bool=True
     ) -> Tuple[torch.Tensor, InfoDict]:
     traj1, traj2 = split_trajectory(traj)
+    info = {}
 
     # no_grad needed?
     with torch.no_grad():
@@ -113,6 +114,9 @@ def calc_dyn_enc_persistent_loss(
 
     if train_wm_sup:
         wm_loss, wm_info = calc_stoch_wm_loss(traj2, wm, traj2.dynamics)
+        info.update(('persist_dyn_' + k, v) for k, v in wm_info.items())
+    else:
+        wm_loss = 0.0
     
     rollouts = []
     with torch.set_grad_enabled(train_wm):
@@ -127,9 +131,8 @@ def calc_dyn_enc_persistent_loss(
     dyn_enc_loss = F.mse_loss(imag_pred_dyns, imag_traj.dynamics[-1])  # predict only the last dynamics. (hmm)
 
     loss = dyn_enc_loss + wm_loss
-    info = {'dyn_enc_loss': dyn_enc_loss.item()}
-    info.update(('persistent_dyn_' + k, v) for k, v in wm_info.items())
-
+    info['dyn_enc_loss'] = dyn_enc_loss.item()
+    
     return loss, info
 
 
